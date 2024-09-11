@@ -1,0 +1,63 @@
+Option Compare Database
+Option Explicit
+Global ggIntCancelarEnlace As Integer
+
+Public Function MensajeBusyBox(strMensaje, Optional strTitulo As String = "", Optional intclear As Integer = False, Optional intMensajePreserve As Integer = False) As String
+    On Error GoTo Error_MensajeBusyBox
+Ini:
+    DoEvents
+    MensajeBusyBox = ""
+    If intclear Then
+        If strMensaje = "" And intMensajePreserve = False Then
+            DoCmd.Close acForm, "frmBusyBox", acSaveNo
+        Else
+            If intMensajePreserve = False Then
+                Forms("frmBusyBox").txtInfo = strMensaje
+            Else
+                Forms("frmBusyBox").txtInfo = Forms("frmBusyBox").txtInfo & vbCrLf & strMensaje
+            End If
+            If strTitulo <> "" Then
+                Forms("frmBusyBox").Caption = strTitulo
+            End If
+            Forms("frmBusyBox")("btnCerrar").Visible = True
+        End If
+    Else
+        If intMensajePreserve = False Then
+            Forms("frmBusyBox").txtInfo = strMensaje
+        Else
+            Forms("frmBusyBox").txtInfo = Forms("frmBusyBox").txtInfo & vbCrLf & strMensaje
+        End If
+        If strTitulo <> "" Then
+            Forms("frmBusyBox").Caption = strTitulo
+        End If
+        Forms("frmBusyBox").Repaint
+'        If ggIntCancelarEnlace = True Then
+'            Dim intResp As Integer
+'            intResp = MsgBox("¿Cancelar el proceso?", vbYesNo + vbQuestion + vbDefaultButton2)
+'            If intResp = vbYes Then
+'                DoCmd.Close acForm, "frmBusyBox"
+'                MensajeBusyBox = "Cancel"
+'            End If
+'        End If
+    End If
+Salir_MensajeBusyBox:
+    If IsOpenForm("frmBusyBox") Then Forms("frmBusyBox").SetFocus
+    Exit Function
+Error_MensajeBusyBox:
+    Select Case Err
+        Case 2450 'el formulario no está abierto
+            DoCmd.OpenForm "frmBusyBox"
+            Resume Ini
+        Case Else
+            MsgBox "Error nº " & Err & " en MensajeBusyBox" & vbCrLf & Err.Description
+            Resume Salir_MensajeBusyBox
+            Resume Next
+    End Select
+End Function
+
+Public Function IsOpenForm(sFormName As String) As Boolean
+    On Error Resume Next
+    Dim frm As Form
+    Set frm = Forms(sFormName)
+    IsOpenForm = Err = 0
+End Function

@@ -1,0 +1,41 @@
+Option Compare Database
+Option Explicit
+
+
+Public Function fSelect(sRowSource As String _
+                      , iTypeRow123 As Integer _
+                      , iNumCols As Integer _
+                      , sColWidths As String _
+                      , sInfo As String _
+                      , bMultiSelect As Boolean) As Variant
+    On Error GoTo HandleError
+    Dim sXML As String, sTipo As String, sResult As String
+    PonXML sXML, "RowSource", sRowSource
+    Select Case iTypeRow123
+        Case 1: sTipo = "Table/Query"
+        Case 2: sTipo = "Value List"
+        Case 3: sTipo = "Field List"
+        Case Else: sTipo = "Table/Query"
+    End Select
+    PonXML sXML, "TypeRow", sTipo
+    PonXML sXML, "NumCols", iNumCols
+    PonXML sXML, "ColWidths", sColWidths
+    PonXML sXML, "Info", sInfo
+    PonXML sXML, "MultiSelect", IIf(bMultiSelect, "S", "N")
+    DoCmd.OpenForm "frmSelect", , , , , acDialog, sXML
+    On Error Resume Next
+    sResult = Forms("frmSelect").Result
+    If Err <> 0 Then GoTo HandleExit
+    DoCmd.Close acForm, "frmSelect"
+    If bMultiSelect Then
+        fSelect = Split(sResult, ",")
+    Else
+        fSelect = sResult
+    End If
+                          
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function

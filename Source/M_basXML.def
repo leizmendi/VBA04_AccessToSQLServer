@@ -1,0 +1,176 @@
+Option Compare Database
+Option Explicit
+    'Private m_objDOMPeople As DOMDocument
+    'Dim awe As SoapClient30
+
+Public Sub PonXML(ByRef strXML As Variant, strNombreTag As String, vValor As Variant, Optional intSaltoLinea As Integer = True, Optional strAtts As String = "", Optional intSustituye As Integer = False)
+    On Error GoTo Error_PonXML
+    Dim i As Integer, j As Integer, strTagAtts As String
+    strTagAtts = strNombreTag & IIf(strAtts = "", "", " ") & strAtts
+    If intSustituye = True Then
+        i = InStr(1, strXML, "<" & strTagAtts & ">")
+        j = InStr(1, strXML, "</" & strNombreTag & ">")
+        If i = 0 Or j = 0 Or (i + Len(strTagAtts) + 2) > j Then GoTo AñadirTag
+        strXML = Left(strXML, i + Len(strTagAtts) + 1) & CStr(Nz(vValor, "")) & Mid(strXML, j)
+        Exit Sub
+    End If
+AñadirTag:
+    strXML = strXML & IIf(intSaltoLinea, vbCrLf, "") & "<" & strTagAtts & ">" & CStr(Nz(vValor, "")) & "</" & strNombreTag & ">" & IIf(intSaltoLinea, vbCrLf, "")
+Bucle:
+    i = InStr(strXML, vbCrLf & vbCrLf)
+    If i > 0 Then
+        strXML = Left(strXML, i - 1) & Mid(strXML, i + 2)
+        GoTo Bucle
+    End If
+Salir_PonXML:
+    Exit Sub
+Error_PonXML:
+    Select Case Err
+        Case Else
+            MsgBox "Error en PonXML" & vbCrLf & Err.Description
+            Resume Salir_PonXML
+    End Select
+End Sub
+
+Public Function DimeXML(strXML As String, strNombreTag As String, Optional ByRef intInicio As Integer = 1, Optional strReturnAtributos As String, Optional intPosicion As Integer = 1) As Variant
+    On Error GoTo Error_DimeXML
+    Dim i As Integer, j As Integer, v As Variant, i1 As Integer, p As Integer
+    'VerXML strXML
+    If intPosicion > 1 Then
+        For p = 1 To intPosicion - 1
+            i = InStr(IIf(intInicio = 0, 1, intInicio), strXML, "<" & strNombreTag & ">")
+            j = DimeDondeCierraTagXML(strXML, strNombreTag, i) 'InStr(IIf(intInicio = 0, 1, intInicio), strXML, "</" & strNombreTag & ">")
+            If i = 0 Then
+                i = InStr(IIf(intInicio = 0, 1, intInicio), strXML, "<" & strNombreTag & " ")
+                If i = 0 Then
+                    DimeXML = Null
+                    strReturnAtributos = ""
+                    intInicio = 0
+                    Exit Function
+                Else
+                    i1 = InStr(i + 1, strXML, ">")
+                    If j = 0 Or i1 > j Then
+                        DimeXML = Null
+                        strReturnAtributos = ""
+                        intInicio = 0
+                        Exit Function
+                    End If
+                    'atributos....
+                End If
+            End If
+            'i = InStr(intInicio, strXML, "<" & strNombreTag & ">")
+            'j = InStr(intInicio, strXML, "</" & strNombreTag & ">")
+            'If i = 0 Or j = 0 Or (i + Len(strNombreTag) + 2) > j Then
+            '    DimeXML = Null
+            '    Exit Function
+            'End If
+            intInicio = j + 1
+        Next p
+    End If
+            
+    i = InStr(IIf(intInicio = 0, 1, intInicio), strXML, "<" & strNombreTag & ">")
+    If i = 0 Then
+        i = InStr(IIf(intInicio = 0, 1, intInicio), strXML, "<" & strNombreTag & " ")
+        If i = 0 Then
+            DimeXML = Null
+            strReturnAtributos = ""
+            intInicio = 0
+            Exit Function
+        Else
+            'atributos....
+        End If
+    End If
+    intInicio = i
+    i1 = InStr(i + 1, strXML, ">")
+    '.... atributos
+    j = intInicio + Len(strNombreTag) + 1
+    strReturnAtributos = Trim(Mid(strXML, j, i1 - j))
+    '.... fin atributos
+    j = DimeDondeCierraTagXML(strXML, strNombreTag, i) 'InStr(intInicio, strXML, "</" & strNombreTag & ">")
+    If j = 0 Then j = InStr(intInicio, strXML, "<" & strNombreTag & "/>")
+    If i = 0 Or j = 0 Or (i + Len(strNombreTag) + 2) > j Then
+        DimeXML = Null
+        Exit Function
+    End If
+'    intInicio = j
+    'i = i + Len(strNombreTag) + 2
+    i = i1 + 1
+    v = Mid(strXML, i, j - i)
+    DimeXML = v
+Salir_DimeXML:
+    Exit Function
+Error_DimeXML:
+    Select Case Err
+        Case Else
+            MsgBox "Error en DimeXML" & vbCrLf & Err.Description
+            Resume Salir_DimeXML
+    End Select
+End Function
+
+Public Function QuitaTagsXML(strXML As String, Optional intInicio As Integer = 1, Optional intQuitaContenidoTag As Integer = True) As Variant
+    
+    On Error GoTo Error_QuitaTagsXML
+    Dim i As Integer, j As Integer, k As Integer, v As Variant
+    Dim strR As String, strTag As String, strAux As String
+    strR = strXML
+    i = InStr(intInicio, strR, "<")
+    If i > 0 Then
+        j = InStr(i, strR, ">")
+        If j > 0 Then
+            strTag = Mid(strR, i + 1, j - (i + 1))
+            k = InStr(j + 1, strR, "</" & strTag & ">")
+            If k > 0 Then
+                If intQuitaContenidoTag Then
+                    If i > 1 Then
+                        strR = Mid(strR, 1, i - 1) & Mid(strR, k + Len(strTag) + 3)
+                    Else
+                        strR = Mid(strR, k + Len(strTag) + 3)
+                    End If
+                Else
+                    If i > 1 Then
+                        strR = Mid(strR, 1, i - 1) & Mid(strR, i + Len(strTag) + 2, k - (i + Len(strTag) + 2)) & Mid(strR, k + Len(strTag) + 3)
+                    Else
+                        strR = Mid(strR, i + Len(strTag) + 2, k - (i + Len(strTag) + 2)) & Mid(strR, k + Len(strTag) + 3)
+                    End If
+                End If
+            End If
+        End If
+        QuitaTagsXML = QuitaTagsXML(strR, i, intQuitaContenidoTag)
+    Else
+        QuitaTagsXML = strR
+    End If
+Salir_QuitaTagsXML:
+    Exit Function
+Error_QuitaTagsXML:
+    Select Case Err
+        Case Else
+            MsgBox "Error en QuitaTagsXML" & vbCrLf & Err.Description
+            Resume Salir_QuitaTagsXML
+    End Select
+    
+End Function
+
+Public Function DimeDondeCierraTagXML(strXML As String, strTag As String, ByVal intInicio As Integer) As Integer
+    On Error GoTo Error_DimeDondeCierraTagXML
+    Dim j As Integer, k As Integer, v As Variant
+    
+BuscaCierre:
+    j = InStr(intInicio + 1, strXML, "</" & strTag & ">")
+    If j > 0 Then
+        k = InStr(intInicio + 1, strXML, "<" & strTag & ">")
+        If k > intInicio And k < j Then
+            intInicio = j
+            GoTo BuscaCierre
+        End If
+    End If
+    DimeDondeCierraTagXML = j
+Salir_DimeDondeCierraTagXML:
+    Exit Function
+Error_DimeDondeCierraTagXML:
+    Select Case Err
+        Case Else
+            MsgBox "Error en DimeDondeCierraTagXML" & vbCrLf & Err.Description
+            Resume Salir_DimeDondeCierraTagXML
+    End Select
+    
+End Function

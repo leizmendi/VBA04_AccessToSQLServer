@@ -1,0 +1,38 @@
+Option Compare Database
+Option Explicit
+
+    ''''''''''''''''''''''''''''''''''' Código para hacer scroll en un listbox
+    Private Declare Function SendMessage Lib "user32" Alias "SendMessageA" _
+    (ByVal Hwnd As Long, ByVal wMsg As Long, _
+    ByVal wParam As Long, lParam As Any) As Long
+    
+    Private Declare Function GetFocus Lib "user32" () As Long
+    
+    Private Const WM_VSCROLL = &H115
+    Private Const SB_THUMBPOSITION = 4
+    ''''''''''''''''''''''''''''''''''' Código para hacer scroll en un listbox
+
+Function MakeDWord(loword As Integer, hiword As Integer) As Long
+    MakeDWord = (hiword * &H10000) Or (loword And &HFFFF&)
+End Function
+
+Public Sub Scroll_ListBox_Selected(lst As ListBox)
+    On Error GoTo HandleError
+    Dim i As Integer, hWndSB As Long, lngThumb As Long, lngRet As Long
+    For i = 1 To lst.ListCount - 1
+        If lst.Selected(i) = True Then
+            lst.SetFocus
+            hWndSB = GetFocus
+            lngThumb = MakeDWord(SB_THUMBPOSITION, i)
+            lngRet = SendMessage(hWndSB, WM_VSCROLL, lngThumb, 0&)
+            Exit For
+        End If
+    Next i
+HandleExit:
+    Exit Sub
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Sub
+
+''''''''''''''''''''''''''''''''''' Código para hacer scroll en un listbox

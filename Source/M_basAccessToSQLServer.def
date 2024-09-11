@@ -1,0 +1,693 @@
+Option Compare Database
+Option Explicit
+
+Public Type SQLdb
+    Server As String
+    DBname As String
+    User As String
+    Password As String
+End Type
+
+Public Function GetDBfromFile(lIdAccessDB As Long _
+                            , sServer As String _
+                            , sDatabase As String _
+                            , sUser As String _
+                            , sPassword As String) As Database
+    On Error GoTo HandleError
+    Dim sBasePath As String, sAdbPath As String
+    Dim lIdMigration As Long
+    lIdMigration = DLookup("IdMigration", "tbAccessDBs", "Id = " & lIdAccessDB)
+    sServer = DLookup("TargetServer", "tbMigrations", "Id = " & lIdMigration)
+    sDatabase = DLookup("TargetDB", "tbMigrations", "Id = " & lIdMigration)
+    sUser = DLookup("User", "tbMigrations", "Id = " & lIdMigration)
+    sPassword = DLookup("Pass", "tbMigrations", "Id = " & lIdMigration)
+    sBasePath = Nz(DLookup("Carpeta", "tbMigrations", "Id = " & lIdMigration), "")
+    If sBasePath = "" Then
+        MsgBox "Se debe indicar carpeta base de la Migración", vbExclamation
+        GoTo HandleExit
+    End If
+    sAdbPath = Nz(DLookup("[Path] & [FileName]", "tbAccessDBs", "Id = " & lIdAccessDB), "")
+    Set GetDBfromFile = OpenDatabase(sBasePath & sAdbPath, , True)
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+Public Function GenerarTSQLEstructuraTabla(db As DAO.Database, sTabla As String) As String
+    
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve la sentencia TSQL para generar las tablas de la base de datos incluidas en la lista: tabla1,tabla2,tabla3''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    On Error GoTo HandleError
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
+    Dim idx As DAO.index
+    Dim rel As DAO.Relation
+    Dim strSQL As String
+    Dim strTableSQL As String
+    Dim strFieldSQL As String
+    Dim i As Integer
+    Dim fieldCount As Integer
+    Dim sResult As String
+        
+    Set tdf = db.TableDefs(Trim(sTabla))
+    strTableSQL = "IF OBJECT_ID('dbo." & tdf.Name & "', 'U') IS NOT NULL" _
+       & vbCrLf & "DROP TABLE dbo." & tdf.Name & ";" _
+       & vbCrLf & "CREATE TABLE " & tdf.Name & " (" & vbCrLf
+    strFieldSQL = ""
+    fieldCount = 0
+    
+    ' Recorrer todos los campos de la tabla
+    For Each fld In tdf.Fields
+        ' Obtener el nombre del campo y su tipo de dato
+        If (fld.Attributes And dbAutoIncrField) <> 0 Then
+        ' Si es un campo autonumérico, utilizar INT IDENTITY
+            strFieldSQL = "[" & fld.Name & "] INT IDENTITY(1,1)"
+        Else
+            strFieldSQL = "[" & fld.Name & "] " & AccessToSQLDataType(fld.Type, fld.Size)
+        End If
+        
+        ' Si es un campo con clave primaria, añadir la restricción
+        For Each idx In tdf.Indexes
+            If idx.Primary And fld.Name = idx.Fields(0).Name Then
+                strFieldSQL = strFieldSQL & " PRIMARY KEY"
+                Exit For
+            End If
+        Next idx
+        
+        ' Añadir coma entre campos (menos en el último)
+        If fieldCount > 0 Then
+            strTableSQL = strTableSQL & ", " & vbCrLf
+        End If
+        
+        strTableSQL = strTableSQL & strFieldSQL
+        fieldCount = fieldCount + 1
+    Next fld
+    
+    ' Cerrar la instrucción CREATE TABLE
+    strTableSQL = strTableSQL & vbCrLf & ");" & vbCrLf & vbCrLf
+    
+    ' Mostrar el comando SQL generado (o enviarlo a SQL Server)
+    Debug.Print strTableSQL
+    GenerarTSQLEstructuraTabla = strTableSQL
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function GenerarTSQLRelaciones(db As DAO.Database) As String
+    ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve la sentencia TSQL para generar las relaciones entre tablas de la base de datos, diferenciando relaciones lógicas
+    'de relaciones con integridad referencial, y eliminando las claves foráneas preexistentes.
+    ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    On Error GoTo HandleError
+    Dim rel As DAO.Relation
+    Dim fld As DAO.Field
+    Dim strSQL As String, sResult As String
+    Dim foreignKeySQL As String
+    Dim hasReferentialIntegrity As Boolean
+    Dim constraintName As String
+    
+    ' Recorrer todas las relaciones en la base de datos
+    For Each rel In db.Relations
+        If rel.Name Like "MSys*" Then
+        Else
+            ' Verificar si la relación tiene integridad referencial
+            hasReferentialIntegrity = False
+            If (rel.Attributes And dbRelationUnique) Or (rel.Attributes And dbRelationUpdateCascade) Or (rel.Attributes And dbRelationDeleteCascade) Then
+                hasReferentialIntegrity = True
+            End If
+            
+            ' Generar el nombre de la clave foránea
+            constraintName = "FK_" & rel.ForeignTable & "_" & rel.Table
+            
+            ' Verificar si la relación ya existe, y si es así, eliminarla
+            
+            ' Generar la instrucción SQL para la clave foránea si tiene integridad referencial
+            sResult = sResult & vbCrLf & constraintName
+            If hasReferentialIntegrity Then
+                foreignKeySQL = "IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = '" & constraintName & "') " & vbLf & _
+                                "BEGIN " & vbLf & _
+                                "    ALTER TABLE " & rel.ForeignTable & " DROP CONSTRAINT " & constraintName & ";" & vbLf & _
+                                "END;" & vbLf
+                foreignKeySQL = foreignKeySQL & "ALTER TABLE " & rel.ForeignTable & " ADD CONSTRAINT " & constraintName & _
+                                " FOREIGN KEY (" & rel.Fields(0).ForeignName & ") REFERENCES " & rel.Table & " (" & rel.Fields(0).Name & ")"
+                
+                ' Agregar las opciones CASCADE si es necesario
+                If (rel.Attributes And dbRelationUpdateCascade) Then
+                    foreignKeySQL = foreignKeySQL & " ON UPDATE CASCADE"
+                End If
+                If (rel.Attributes And dbRelationDeleteCascade) Then
+                    foreignKeySQL = foreignKeySQL & " ON DELETE CASCADE"
+                End If
+                foreignKeySQL = foreignKeySQL & ";"
+                
+                ' Añadir la sentencia a la salida
+                sResult = sResult & vbCrLf & foreignKeySQL
+            Else
+                ' Para relaciones que no impliquen integridad referencial, simplemente ignóralas o genera un comentario
+                sResult = sResult & vbCrLf & "-- Relación sin integridad referencial: " & rel.Name
+            End If
+        End If
+    Next rel
+    
+    If Len(sResult) > 2 Then sResult = Mid(sResult, 3)
+    GenerarTSQLRelaciones = sResult
+
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+Public Function GenerarTSQLEliminarRelaciones() As String
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve la sentencia TSQL para eliminar todas las relaciones entre tablas de una base de datos'''''''''''''''''''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    
+    On Error GoTo HandleError
+    Dim sResult As String
+    sResult = "DECLARE @sql NVARCHAR(MAX) = N'';" & vbCrLf _
+            & "-- Genera las sentencias ALTER TABLE para eliminar todas las claves foráneas" & vbCrLf _
+            & "SELECT @sql += 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(parent_object_id) + '].[' + OBJECT_NAME(parent_object_id) + '] DROP CONSTRAINT [' + name + '];' + CHAR(13)" & vbCrLf _
+            & "FROM sys.foreign_keys;" & vbCrLf _
+            & "-- Ejecuta las sentencias generadas" & vbCrLf _
+            & "EXEC sp_executesql @sql;"
+
+    
+    GenerarTSQLEliminarRelaciones = sResult
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+
+Public Function GenerarTSQLEliminarIndices(sTabla As String) As String
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve la sentencia TSQL para eliminar todas las relaciones entre tablas de una base de datos'''''''''''''''''''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    
+    On Error GoTo HandleError
+    Dim sResult As String
+
+    sResult = "DECLARE @TableName NVARCHAR(256) = '" & sTabla & "'" & vbCrLf _
+            & "DECLARE @SQL NVARCHAR(MAX) = '';" & vbCrLf _
+            & "-- Genera las sentencias DROP INDEX para todos los índices de la tabla" & vbCrLf _
+            & "SELECT @SQL = @SQL + 'DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(t.name) + '; ' + CHAR(13)" & vbCrLf _
+            & "FROM sys.indexes i JOIN sys.tables t ON i.object_id = t.object_id" & vbCrLf _
+            & "WHERE i.type > 0  -- Excluye índices especiales como índices de clave primaria y únicos" & vbCrLf _
+            & "AND t.name = @TableName;" & vbCrLf _
+            & "-- Ejecuta las sentencias generadas" & vbCrLf _
+            & "EXEC sp_executesql @SQL;"
+    
+    GenerarTSQLEliminarIndices = sResult
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+
+Public Function GenerarTSQLIndices(db As DAO.Database _
+                                , tblName As String) As String
+    On Error GoTo HandleError
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve las sentencias TSQL para generar todos las índices de una tabla en una lista:         '''''''''''''''''''''''''''''
+    '                                                       separador |: sentencia 1|sentencia 2|etc'''''''''''''''''''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    Dim tdf As DAO.TableDef
+    Dim idx As DAO.index
+    Dim fld As DAO.Field
+    Dim tsql As String, sResult As String
+    Dim indiceCampos As String
+    Dim isUnique As String
+    
+    
+    ' Obtener la definición de la tabla
+    Set tdf = db.TableDefs(tblName)
+    
+    ' Recorrer los índices de la tabla
+    For Each idx In tdf.Indexes
+        indiceCampos = ""  ' Inicializar para cada índice
+        
+        ' Verificar si el índice es único
+        If idx.Unique Then
+            isUnique = "UNIQUE "
+        Else
+            isUnique = ""
+        End If
+        
+        ' Recorrer los campos del índice
+        For Each fld In idx.Fields
+            If indiceCampos <> "" Then
+                indiceCampos = indiceCampos & ", "
+            End If
+            indiceCampos = indiceCampos & "[" & fld.Name & "]"
+        Next fld
+        
+        ' Generar la sentencia T-SQL para el índice
+        tsql = "CREATE " & isUnique & "INDEX [" & idx.Name & "] ON [" & tblName & "] (" & indiceCampos & ");"
+        
+        ' Mostrar o exportar el T-SQL generado
+        Debug.Print tsql
+        sResult = sResult & vbCrLf & "-- " & idx.Name & ": " & vbCrLf & tsql
+    Next idx
+    If Len(sResult) > 2 Then sResult = Mid(sResult, 3)
+    GenerarTSQLIndices = sResult
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+Function AccessToSQLDataType(AccessType As Integer, FieldSize As Long) As String
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Devuelve el nombre del tipo de campo para SQL Server correspondiente al de Access pasado en el parámetro''''''''''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    On Error GoTo HandleError
+    Select Case AccessType
+        Case dbText
+            AccessToSQLDataType = "NVARCHAR(" & FieldSize & ")"
+        Case dbMemo
+            AccessToSQLDataType = "TEXT"
+        Case dbLong
+            AccessToSQLDataType = "INT"
+        Case dbInteger
+            AccessToSQLDataType = "SMALLINT"
+        Case dbSingle
+            AccessToSQLDataType = "REAL"
+        Case dbDouble
+            AccessToSQLDataType = "FLOAT"
+        Case dbCurrency
+            AccessToSQLDataType = "MONEY"
+        Case dbDate
+            AccessToSQLDataType = "DATETIME"
+        Case dbBoolean
+            AccessToSQLDataType = "BIT"
+        Case Else
+            AccessToSQLDataType = "NVARCHAR(255)" ' Por defecto, usamos NVARCHAR
+    End Select
+    
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function TraspasaDatosTabla(lIdTabla As Long _
+                        , Optional batchSize As Integer = 100 _
+                        , Optional ByRef lNumRegistros As Long _
+                        , Optional iRunSQL_ToText As Integer = 1 _
+                        , Optional sSQL_R As String) As Boolean
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Genera SQL para migración de datos y ejecuta la SQL en bloques de batchSize Registros'''''''''''''''''''''''''''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    
+    On Error GoTo HandleError
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim td As DAO.TableDef
+    Dim fld As DAO.Field
+    Dim strSQL As String
+    Dim strInsert As String
+    Dim strFields As String
+    Dim strValues As String
+    Dim i As Integer, j As Integer, batchCount As Integer, iR As Integer
+
+    Dim lIdAccessDB As Long, sTableName As String, sSQL As String, lRegistrosAfectados As Long, lTotalRegistrosAfectados As Long
+    Dim sTargetServer As String, sTargetDB As String, sUser As String, sPass As String, bHasAutonum As Boolean
+    lIdAccessDB = DLookup("IdAccessDB", "tbTablas", "Id = " & lIdTabla)
+    sTableName = DLookup("TableName", "tbTablas", "Id = " & lIdTabla)
+    bHasAutonum = InStr(DLookup("TSQL", "tbTablas", "Id = " & lIdTabla), "INT IDENTITY(1,1)") > 0
+    Set db = GetDBfromFile(lIdAccessDB, sTargetServer, sTargetDB, sUser, sPass)
+    Set rs = db.OpenRecordset(sTableName, dbOpenSnapshot)
+    ' Recorrer todos los registros de la tabla
+    If Not rs.EOF Then
+        rs.MoveLast
+        rs.MoveFirst
+        'iR = MsgBox("¿Traspasar " & rs.RecordCount & " registros de la tabla " & sTableName & "?", vbOKCancel + vbQuestion)
+        iR = vbOK
+        If iR = vbCancel Then GoTo HandleExit
+    End If
+    batchCount = 0
+    DoEvents
+'    '-- Habilitar IDENTITY_INSERT para la tabla
+'    RunTSQL "SET IDENTITY_INSERT " & sTableName & " ON;", sTargetServer, sTargetDB, sUser, sPass
+
+    Do Until rs.EOF
+        strInsert = IIf(bHasAutonum, "SET IDENTITY_INSERT " & sTableName & " ON;" & vbCrLf, "") _
+                  & "INSERT INTO " & sTableName & " ("
+
+        For i = 0 To rs.Fields.Count - 1
+            strInsert = strInsert & "[" & rs.Fields(i).Name & "],"
+        Next i
+        
+        strInsert = Left(strInsert, Len(strInsert) - 1) & ") VALUES "
+
+        For i = 1 To batchSize
+            If rs.EOF Then Exit For
+            
+            strValues = "("
+            For j = 0 To rs.Fields.Count - 1
+                If IsNull(rs.Fields(j).Value) Then
+                    strValues = strValues & "NULL,"
+                ElseIf rs.Fields(j).Type = dbText Or rs.Fields(j).Type = dbMemo Then
+                    strValues = strValues & "'" & Replace(rs.Fields(j).Value, "'", "''") & "',"
+                ElseIf rs.Fields(j).Type = dbDate Then
+                    If rs.Fields(j).Value < #1/1/1753# Or rs.Fields(j).Value > #12/31/9999# Then
+                        ' Si está fuera del rango, usamos NULL o una fecha por defecto
+                        strValues = strValues & "NULL,"
+                    Else
+                        strValues = strValues & "CONVERT(DATETIME, '" & Format(rs.Fields(j).Value, "yyyy-mm-dd hh:nn:ss") & "',120),"
+                    End If
+                ElseIf rs.Fields(j).Type = dbBoolean Then
+                    strValues = strValues & IIf(rs.Fields(j).Value = True, 1, 0) & ","
+                Else
+                    strValues = strValues & Replace(CStr(rs.Fields(j).Value), ",", ".") & ","
+                End If
+            Next j
+
+            strValues = Left(strValues, Len(strValues) - 1) & "),"
+            strInsert = strInsert & strValues
+            rs.MoveNext
+            lNumRegistros = lNumRegistros + 1
+        Next i
+
+        strInsert = Left(strInsert, Len(strInsert) - 1) & ";"
+        strInsert = strInsert & IIf(bHasAutonum, vbCrLf & "SET IDENTITY_INSERT " & sTableName & " OFF;", "")
+        lRegistrosAfectados = 0
+        
+        If iRunSQL_ToText = 1 Then
+            RunTSQL strInsert, sTargetServer, sTargetDB, sUser, sPass, lRegistrosAfectados
+            lTotalRegistrosAfectados = lTotalRegistrosAfectados + lRegistrosAfectados
+        Else
+            sSQL_R = sSQL_R & strInsert & vbCrLf
+        End If
+        batchCount = batchCount + 1
+        If batchCount Mod 10 = 0 Then
+            Debug.Print "Procesados " & lTotalRegistrosAfectados & " registros."
+            MensajeBusyBox "Procesados " & lNumRegistros & " registros / " & rs.RecordCount, "Migrar Tabla " & sTableName
+            DoEvents
+        End If
+    Loop
+        
+    rs.Close
+'    '-- Deshabilitar IDENTITY_INSERT para la tabla
+'    RunTSQL "SET IDENTITY_INSERT " & sTableName & " OFF;", sTargetServer, sTargetDB, sUser, sPass
+
+    Debug.Print "Total registros " & sTableName & ": " & lNumRegistros
+    CurrentDb.Execute "UPDATE tbTablas SET NumRegistros = " & lNumRegistros & " WHERE Id = " & lIdTabla, dbFailOnError
+    TraspasaDatosTabla = True
+    'MsgBox "OK: Total registros afectados" & sTableName & ": " & lTotalRegistrosAfectados, vbInformation
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+
+Public Function RunTSQL(sSQL As String _
+                    , sServer As String _
+                    , sDBname As String _
+                    , sUser As String _
+                    , sPass As String _
+     , Optional ByRef lRegistrosAfectados As Long _
+           , Optional bMsg As Boolean = False) As Boolean
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    'Septiembre 2024
+    'Lorenzo - Abauntz Software + ChatGPT
+    'Ejecuta sentencia TSQL, devuelve true si no hay error en la ejecución y Nº de registros afectados si es el caso'''''''''''''
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    On Error GoTo HandleError
+    Dim conn As ADODB.Connection
+    Dim strConn As String
+
+    ' Cadena de conexión sin ODBC (OLE DB)
+    strConn = "Provider=SQLOLEDB" _
+            & ";Data Source=" & sServer _
+            & ";Initial Catalog=" & sDBname _
+            & ";User ID=" & sUser _
+            & ";Password=" & sPass & ";"
+    
+    ' Crear la conexión ADO
+    Set conn = New ADODB.Connection
+    
+    ' Abrir la conexión
+    conn.Open strConn
+    
+    If conn.State = adStateOpen Then
+        'MsgBox "Conexión exitosa a SQL Server"
+    Else
+        MsgBox "Error en la conexión"
+        GoTo HandleExit
+    End If
+    
+    ' Ejecutar el comando SQL
+    conn.Execute sSQL, lRegistrosAfectados
+    RunTSQL = True
+    If bMsg Then MsgBox "Se ejecutó correctamente la SQL", vbInformation
+    
+HandleExit:
+    ' Cerrar la conexión
+    On Error Resume Next
+    If Not conn Is Nothing Then conn.Close
+    Set conn = Nothing
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function GetCredencialesDB(lIdMigration As Long) As SQLdb
+    On Error GoTo HandleError
+    Dim SQLdbTo As SQLdb
+    SQLdbTo.Server = Nz(DLookup("TargetServer", "tbMigrations", "Id = " & lIdMigration))
+    SQLdbTo.DBname = Nz(DLookup("TargetDB", "tbMigrations", "Id = " & lIdMigration))
+    SQLdbTo.User = Nz(DLookup("User", "tbMigrations", "Id = " & lIdMigration))
+    SQLdbTo.Password = Nz(DLookup("Pass", "tbMigrations", "Id = " & lIdMigration))
+    GetCredencialesDB = SQLdbTo
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+Public Sub MigrarTabla(lIdTabla As Long _
+            , Optional bCREATE As Boolean = True _
+            , Optional bINSERT As Boolean = True _
+            , Optional bINDEXES As Boolean = True _
+            , Optional bForzarNuevosSQLs As Boolean = True _
+            , Optional iRunSQL_ToText As Integer = 1 _
+            , Optional sSQL_R As String)
+    On Error GoTo HandleError
+    Dim sSQL As String, SQLdbTo As SQLdb, bOK As String, sBasePath As String, sFilePath As String, db As DAO.Database, sTabla As String
+    Dim lIdMigration As Long, lIdAccessDB As Long, sMsg As String, rs As Recordset, vTSQLs As Variant, i As Integer, item As Variant, lNumRegistros As Long
+    lIdAccessDB = DLookup("IdAccessDB", "tbTablas", "Id = " & lIdTabla)
+    lIdMigration = DLookup("IdMigration", "tbAccessDBs", "Id = " & lIdAccessDB)
+    SQLdbTo = GetCredencialesDB(lIdMigration)
+    
+    sBasePath = DLookup("Carpeta", "tbMigrations", "Id = " & lIdMigration)
+    sFilePath = DLookup("[Path] & [FileName]", "tbAccessDBs", "Id = " & lIdAccessDB)
+    sFilePath = sBasePath & sFilePath
+    sTabla = DLookup("TableName", "tbTablas", "Id = " & lIdTabla)
+    Set db = OpenDatabase(sFilePath, , True)
+CREATE_TABLE:
+    If Not bCREATE Then GoTo INSERT_VALUES
+    sSQL = Nz(DLookup("TSQL", "tbTablas", "Id = " & lIdTabla), "")
+    If sSQL = "" Or bForzarNuevosSQLs Then
+        sSQL = GenerarTSQLEstructuraTabla(db, sTabla)
+        CurrentDb.Execute "UPDATE tbTablas SET TSQL = """ & sSQL & """ WHERE Id =" & lIdTabla, dbFailOnError
+    End If
+    If iRunSQL_ToText = 1 Then
+        bOK = RunTSQL(sSQL, SQLdbTo.Server, SQLdbTo.DBname, SQLdbTo.User, SQLdbTo.Password)
+        If bOK Then
+            sMsg = sMsg & "Se creó la tabla " & sTabla & " correctamente - OK" & vbCrLf
+        Else
+            sMsg = sMsg & "No se creó la tabla " & sTabla & " - ERROR" & vbCrLf
+        End If
+    Else
+        'Escribir a fichero
+        sSQL_R = sSQL_R & sSQL & vbCrLf
+    End If
+    MensajeBusyBox sMsg, "Migrar Tabla " & sTabla
+INSERT_VALUES:
+    If Not bINSERT Then GoTo CREATE_INDEXES
+    TraspasaDatosTabla lIdTabla, 100, lNumRegistros, iRunSQL_ToText, sSQL_R
+CREATE_INDEXES:
+    If Not bINDEXES Then GoTo Finish
+    Set rs = CurrentDb.OpenRecordset("SELECT * FROM tbIndices WHERE IdTabla = " & lIdTabla, dbOpenSnapshot)
+    If rs.EOF Or bForzarNuevosSQLs Then
+        CurrentDb.Execute "DELETE * FROM tbIndices WHERE IdTabla = " & lIdTabla, dbFailOnError
+        sSQL = GenerarTSQLIndices(db, sTabla) 'Se reciben idxname1 & vbcrlf & TSQL1 & vbcrlf & idxname2 etc...
+        vTSQLs = Split(sSQL, vbCrLf)
+        For i = 0 To UBound(vTSQLs) - 1 Step 2
+            CurrentDb.Execute "INSERT INTO tbIndices (IdTabla,Indice,TSQL) VALUES(" _
+                                                                        & lIdTabla _
+                                                                        & ", '" & vTSQLs(i) & "'" _
+                                                                        & ", '" & vTSQLs(i + 1) & "')", dbFailOnError
+        Next i
+        Set rs = CurrentDb.OpenRecordset("SELECT * FROM tbIndices WHERE IdTabla = " & lIdTabla, dbOpenSnapshot)
+    End If
+    While Not rs.EOF
+        If iRunSQL_ToText = 1 Then
+            bOK = RunTSQL(rs("TSQL"), SQLdbTo.Server, SQLdbTo.DBname, SQLdbTo.User, SQLdbTo.Password)
+            If bOK Then
+                sMsg = sMsg & "Se creó el índice " & rs("Indice") & " de la tabla " & sTabla & " correctamente - OK" & vbCrLf
+            Else
+                sMsg = sMsg & "No se creó el índice " & rs("Indice") & " de la tabla " & sTabla & " - ERROR" & vbCrLf
+            End If
+        Else
+            sSQL_R = sSQL_R & rs("TSQL") & vbCrLf
+        End If
+        MensajeBusyBox sMsg, "Migrar Tabla " & sTabla & " - Índices"
+        rs.MoveNext
+    Wend
+Finish:
+    MensajeBusyBox sMsg, "MigrarTabla " & sTabla & " - Finalizado", True, True
+    
+HandleExit:
+    Exit Sub
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Sub
+
+
+Public Sub MigrarModelo(db As DAO.Database, rsTablas As Recordset, SQLdbTo As SQLdb)
+    On Error GoTo HandleError
+    Dim rs As Recordset, sSQL As String, sServer As String, sDBname As String, sUser As String, sPass As String, bOK As String
+    Dim iOK As Integer, iErr As Integer
+    'Set rs = CurrentDb.OpenRecordset("_MigrarTablas_", dbOpenSnapshot)
+    'SQLdbTo.Server = "DESKTOP-K36ELVC\SQLEXPRESS"
+    'SQLdbTo.DBname = "T4"
+    'SQLdbTo.User = "userT4"
+    'SQLdbTo.Password = "Passw0rdv"
+    While Not rsTablas.EOF
+        sSQL = GenerarTSQLEstructuraTabla(db, rsTablas("Tabla"))
+        bOK = RunTSQL(sSQL, SQLdbTo.Server, SQLdbTo.DBname, SQLdbTo.User, SQLdbTo.Password)
+        If bOK Then
+            'CurrentDb.Execute "UPDATE _MigrarTablas_ SET Creada = True WHERE Tabla = '" & rs("Tabla") & "'", dbFailOnError
+            iOK = iOK + 1
+        Else
+            iErr = iErr + 1
+        End If
+        rs.MoveNext
+    Wend
+    MsgBox iOK & " tablas creadas correctamente" & vbCrLf & iErr & " errores", vbInformation
+HandleExit:
+    Exit Sub
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Sub
+
+Public Function SelectFolder(Optional initialFolder As String = "") As String
+    On Error GoTo HandleError
+    Dim dialogoCarpeta As FileDialog
+    
+    ' Crear una nueva instancia de la clase FileDialog con el tipo de selección de carpeta
+    Set dialogoCarpeta = Application.FileDialog(msoFileDialogFolderPicker)
+    If initialFolder = "" Then
+        initialFolder = CurrentDb.Name
+        initialFolder = Left(initialFolder, InStrRev(initialFolder, "\") - 1)
+    End If
+    dialogoCarpeta.InitialFileName = initialFolder
+    ' Mostrar el cuadro de diálogo y comprobar si se seleccionó una carpeta
+    If dialogoCarpeta.Show = -1 Then
+        ' Si se seleccionó una carpeta, almacenarla en la variable
+        SelectFolder = dialogoCarpeta.SelectedItems(1)
+    Else
+        ' Si se canceló la selección, mostrar un mensaje
+    End If
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function SelectFiles(sCarpetaInicial As String)
+    On Error GoTo HandleError
+    Dim dialogoFichero As FileDialog
+    Dim ficheroSeleccionado As Variant
+    Dim filtros As String
+    Dim sResult As String
+    
+    ' Crear una nueva instancia de la clase FileDialog con el tipo de selección de archivo
+    Set dialogoFichero = Application.FileDialog(msoFileDialogFilePicker)
+    
+    'Carpeta inicial
+    dialogoFichero.InitialFileName = sCarpetaInicial
+    
+    ' Permitir seleccionar múltiples archivos
+    dialogoFichero.AllowMultiSelect = True
+    
+    ' Establecer el título del cuadro de diálogo
+    dialogoFichero.Title = "Selecciona uno o varios ficheros"
+    
+    ' Limpiar cualquier filtro existente
+    dialogoFichero.Filters.Clear
+    
+    ' Agregar filtros de extensión de archivos (puedes añadir más si lo necesitas)
+    dialogoFichero.Filters.Add "Bases de datos Access", "*.mdb; *.accdb"
+    dialogoFichero.Filters.Add "Todos los archivos", "*.*"
+    
+    ' Mostrar el cuadro de diálogo
+    If dialogoFichero.Show = -1 Then
+        ' Iterar a través de los archivos seleccionados
+        For Each ficheroSeleccionado In dialogoFichero.SelectedItems
+            ' Mostrar la ruta del archivo seleccionado
+            If InStr(ficheroSeleccionado, sCarpetaInicial) <> 1 Then
+                MsgBox "Se deben seleccionar ficheros en la carpeta " & sCarpetaInicial & " o subcarpetas", vbExclamation
+                GoTo HandleExit
+            End If
+            sResult = sResult & "," & Mid(ficheroSeleccionado, Len(sCarpetaInicial) + 1)
+        Next ficheroSeleccionado
+    Else
+        ' Si se canceló la selección, mostrar un mensaje
+        'MsgBox "No se seleccionó ningún fichero."
+    End If
+    If Len(sResult) > 1 Then sResult = Mid(sResult, 2)
+    SelectFiles = sResult
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function

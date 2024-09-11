@@ -1,0 +1,80 @@
+Option Compare Database
+Option Explicit
+
+Public Sub Reordenar(strTabla As String, strCampo As String, Optional strWHERE As String = "*", Optional strMDB As String = "")
+    On Error GoTo Error_Reordenar
+    Dim rs As Recordset, strSQL As String, i As Long, db As Database
+    strSQL = "SELECT * FROM " & strTabla
+    If strWHERE <> "*" Then
+        strSQL = strSQL & " WHERE " & strWHERE
+    End If
+    strSQL = strSQL & " ORDER BY " & strCampo
+    If strMDB = "" Then
+        Set db = CurrentDb
+    Else
+        Set db = OpenDatabase(strMDB)
+    End If
+    Set rs = db.OpenRecordset(strSQL, dbOpenDynaset)
+    While Not rs.EOF
+        i = i + 1
+        rs.Edit
+        rs(strCampo) = i
+        rs.Update
+        rs.MoveNext
+    Wend
+Salir_Reordenar:
+    Exit Sub
+Error_Reordenar:
+    Select Case Err
+        Case Else
+            MsgBox "Error nº " & Err & " en Reordenar" & vbCrLf & Err.Description
+            Resume Salir_Reordenar
+    End Select
+End Sub
+
+Public Function GetSelItems(lst As ListBox, Optional sSeparador As String = "|") As String
+    On Error GoTo HandleError
+    Dim sR As String, vIt As Variant
+    sR = sSeparador
+    For Each vIt In lst.ItemsSelected
+        sR = sR & lst.ItemData(vIt) & sSeparador
+    Next vIt
+    GetSelItems = sR
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Sub SetSelItems(lst As ListBox, sSelItems As String, Optional sSeparador As String = "|", Optional bScrollToSelection As Boolean = True)
+    On Error GoTo HandleError
+    Dim vIt As Variant, i As Integer, j As Integer
+    For i = 0 To lst.ListCount - 1 ' To 0 Step -1
+        j = InStr(sSelItems, sSeparador & lst.ItemData(i) & sSeparador)
+        lst.Selected(i) = j > 0
+        'If j = 1 Then Exit For
+    Next i
+    If bScrollToSelection Then
+        lst.SetFocus
+        Scroll_ListBox_Selected lst
+    End If
+HandleExit:
+    Exit Sub
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Sub
+
+Public Sub RequeryListAndSelItems(lst As ListBox)
+    On Error GoTo HandleError
+    Dim sSelItems As String
+    sSelItems = GetSelItems(lst)
+    lst.Requery
+    SetSelItems lst, sSelItems
+HandleExit:
+    Exit Sub
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Sub
