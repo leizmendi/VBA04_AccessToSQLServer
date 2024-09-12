@@ -2,7 +2,9 @@
 <OASIS>
 	<ProjectSettings>
 		<AdditionalFolders/>
-		<DataTables/>
+		<DataTables>
+			<Table0 TableName="*"/>
+		</DataTables>
 		<BOM value="false"/>
 		<CompatibilityMode value="false"/>
 		<ConvertUTF8 value="false"/>
