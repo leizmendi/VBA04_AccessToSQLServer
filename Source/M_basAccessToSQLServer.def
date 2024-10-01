@@ -1,6 +1,16 @@
 Option Compare Database
 Option Explicit
 
+Public Enum TipoArreglo
+    Cambio_tamaño_campo = 1 ' Sólo campos de texto, Arreglo= NombreCampo,NuevoTamaño
+    Eliminar_campo = 2 ' Arreglo = NombreCampo
+    Añadir_campo = 3 'Arreglo = NombreCampo,TipoDato,[Tamaño]
+    Eliminar_indice = 4 'Arreglo = NombreIndice
+    Añadir_indice = 5 'Arreglo = NombreIndice,PrimaryKeySN,UniqueSN,Campo1;Campo2;...
+    Eliminar_relacion = 6 'Arreglo = NombreRelacion, ForeignTable, CampoClave
+    Añadir_relacion = 7 'Arreglo = NombreRelacion,CampoFK, Reference_Table, Reference_Field, OnUpdateCascadeSN, OnDeleteCascadeSN
+End Enum
+
 Public Type SQLdb
     Server As String
     DBname As String
@@ -9,10 +19,11 @@ Public Type SQLdb
 End Type
 
 Public Function GetDBfromFile(lIdAccessDB As Long _
-                            , sServer As String _
-                            , sDatabase As String _
-                            , sUser As String _
-                            , sPassword As String) As Database
+             , Optional ByRef sServer As String _
+             , Optional ByRef sDatabase As String _
+             , Optional ByRef sUser As String _
+             , Optional ByRef sPassword As String _
+             , Optional ByRef sDBPath As String) As Database
     On Error GoTo HandleError
     Dim sBasePath As String, sAdbPath As String
     Dim lIdMigration As Long
@@ -27,7 +38,8 @@ Public Function GetDBfromFile(lIdAccessDB As Long _
         GoTo HandleExit
     End If
     sAdbPath = Nz(DLookup("[Path] & [FileName]", "tbAccessDBs", "Id = " & lIdAccessDB), "")
-    Set GetDBfromFile = OpenDatabase(sBasePath & sAdbPath, , True)
+    sDBPath = sBasePath & sAdbPath
+    Set GetDBfromFile = OpenDatabase(sDBPath, , True)
 HandleExit:
     Exit Function
 HandleError:
@@ -46,7 +58,7 @@ Public Function GenerarTSQLEstructuraTabla(db As DAO.Database, sTabla As String)
     On Error GoTo HandleError
     Dim tdf As DAO.TableDef
     Dim fld As DAO.Field
-    Dim idx As DAO.index
+    Dim idx As DAO.Index
     Dim rel As DAO.Relation
     Dim strSQL As String
     Dim strTableSQL As String
@@ -240,7 +252,7 @@ Public Function GenerarTSQLIndices(db As DAO.Database _
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
     Dim tdf As DAO.TableDef
-    Dim idx As DAO.index
+    Dim idx As DAO.Index
     Dim fld As DAO.Field
     Dim tsql As String, sResult As String
     Dim indiceCampos As String
@@ -418,7 +430,7 @@ Public Function TraspasaDatosTabla(lIdTabla As Long _
         batchCount = batchCount + 1
         If batchCount Mod 10 = 0 Then
             Debug.Print "Procesados " & lTotalRegistrosAfectados & " registros."
-            MensajeBusyBox "Procesados " & lNumRegistros & " registros / " & rs.RecordCount, "Migrar Tabla " & sTableName
+            MensajeBusyBox "Procesados " & lNumRegistros & " registros / " & rs.RecordCount, "Migrar Tabla " & sTableName, , True
             DoEvents
         End If
     Loop
@@ -543,10 +555,11 @@ CREATE_TABLE:
         'Escribir a fichero
         sSQL_R = sSQL_R & sSQL & vbCrLf
     End If
-    MensajeBusyBox sMsg, "Migrar Tabla " & sTabla
+    MensajeBusyBox sMsg, "Migrar Tabla " & sTabla, , True
 INSERT_VALUES:
     If Not bINSERT Then GoTo CREATE_INDEXES
     TraspasaDatosTabla lIdTabla, 100, lNumRegistros, iRunSQL_ToText, sSQL_R
+    MensajeBusyBox sMsg, lNumRegistros & " insertados en " & sTabla, , True
 CREATE_INDEXES:
     If Not bINDEXES Then GoTo Finish
     Set rs = CurrentDb.OpenRecordset("SELECT * FROM tbIndices WHERE IdTabla = " & lIdTabla, dbOpenSnapshot)
@@ -573,11 +586,11 @@ CREATE_INDEXES:
         Else
             sSQL_R = sSQL_R & rs("TSQL") & vbCrLf
         End If
-        MensajeBusyBox sMsg, "Migrar Tabla " & sTabla & " - Índices"
+        MensajeBusyBox sMsg, "Migrar Tabla " & sTabla & " - Índices", , True
         rs.MoveNext
     Wend
 Finish:
-    MensajeBusyBox sMsg, "MigrarTabla " & sTabla & " - Finalizado", True, True
+    MensajeBusyBox "", "MigrarTabla " & sTabla & " - Finalizado", True, True
     
 HandleExit:
     Exit Sub
@@ -690,4 +703,700 @@ HandleExit:
 HandleError:
     MsgBox Err.Description
     Resume HandleExit
+End Function
+
+Public Function DimeTipoArreglo(Optional lIdArreglo As Long = 0) As Variant
+    On Error GoTo HandleError
+    Dim sRowSource As String
+    sRowSource = "1;Cambio tamaño campo;2;Eliminar campo;3;Añadir campo;4;Eliminar índice;5;Añadir índice;6;Eliminar relación;7;Añadir relación"
+    DimeTipoArreglo = fSelect(sRowSource, 2, 2, "0cm", "Seleccione tipo de arreglo", False)
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function TablasDeFileName(lIdAccessDB As Long) As String
+    On Error GoTo HandleError
+    'Devuelve la lista de tablas de una fichero de base de datos Access que faltan de añadir
+    Dim sFile As String, lIdMigration As Long, sCarpeta As String, db As DAO.Database, tdf As TableDef, sResult As String
+    lIdMigration = Nz(DLookup("IdMigration", "tbAccessDBs", "Id = " & lIdAccessDB), 0)
+    sCarpeta = Nz(DLookup("Carpeta", "tbMigrations", "Id = " & lIdMigration), "")
+    sFile = sCarpeta & Nz(DLookup("[Path] & [FileName]", "tbAccessDBs", "Id = " & lIdAccessDB), "")
+    On Error Resume Next
+    Set db = OpenDatabase(sFile, , True)
+    If Err <> 0 Then
+        If Err = 3031 Then
+            On Error GoTo HandleError
+            Dim sPass As String
+            sPass = InputBox("Contraseña de base de datos", "Contraseña")
+            If sPass = "" Then GoTo HandleExit
+            Set db = OpenDatabase(sFile, False, True, ";PWD=" & sPass)
+        Else
+            MsgBox "Error: " & Err & Err.Description
+            GoTo HandleExit
+        End If
+    End If
+    
+    For Each tdf In db.TableDefs
+        If IsNull(DLookup("Id", "tbTablas", "IdAccessDB = " & lIdAccessDB & " AND TableName = '" & tdf.Name & "'")) _
+            And Not tdf.Name Like "MSys*" _
+            And Len(tdf.Connect) = 0 Then
+            sResult = sResult & ";" & tdf.Name
+        End If
+    Next tdf
+    If Len(sResult) > 1 Then sResult = Mid(sResult, 2)
+    TablasDeFileName = sResult
+    
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function TablasDeAccessDB(lIdAccessDB As Long) As String
+    On Error GoTo HandleError
+    'Devuelve la lista de tablas de una AccessDB
+    Dim rs As Recordset, sResult As String
+    Set rs = CurrentDb.OpenRecordset("SELECT TableName FROM tbTablas WHERE IdAccessDB = " & lIdAccessDB, dbOpenSnapshot)
+    
+    While Not rs.EOF
+        sResult = sResult & ";" & rs("TableName")
+        rs.MoveNext
+    Wend
+    If Len(sResult) > 1 Then sResult = Mid(sResult, 2)
+    TablasDeAccessDB = sResult
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+
+Public Function DimeFieldName(tdf As TableDef _
+                   , Optional sDefault As String = "") As String
+    On Error GoTo HandleError
+    Dim sRowSource As String, fld As Field, sR As String
+    For Each fld In tdf.Fields
+        sRowSource = sRowSource & ";" & fld.Name
+    Next fld
+    sRowSource = Mid(sRowSource, 2) & ";Teclear Campo"
+    sR = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione un campo", False, sDefault), "")
+    If sR = "Teclear campo" Then
+        sR = InputBox("Teclear nombre de campo", "Nombre de campo", sDefault)
+    End If
+    DimeFieldName = sR
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function DimeTipoCampo(Optional sDefault As String = "") As String
+    On Error GoTo HandleError
+    Dim sRowSource As String, fld As Field
+    sRowSource = "Texto;Número;Autonumérico;Fecha/Hora;Moneda;Sí/No"
+    DimeTipoCampo = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione un tipo", False, sDefault), "")
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function Dime_DBTipoCampo(sTipoCampo As String) As Integer
+    On Error GoTo HandleError
+    Dim sTipos As String, vTipos As Variant, dbTipos(5) As Integer, i As Integer
+    sTipos = "Texto;Número;Autonumérico;Fecha/Hora;Moneda;Sí/No"
+    vTipos = Split(sTipos, ";")
+    dbTipos(0) = dbText: dbTipos(1) = dbLong: dbTipos(2) = dbLong: dbTipos(3) = dbDate: dbTipos(4) = dbCurrency: dbTipos(5) = dbBoolean:
+    For i = LBound(vTipos) To UBound(vTipos)
+        If sTipoCampo = vTipos(i) Then
+            Exit For
+        End If
+    Next i
+    If i <= UBound(vTipos) Then Dime_DBTipoCampo = dbTipos(i)
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function DimeIndexName(tdf As TableDef _
+                   , Optional sDefault As String = "") As String
+    On Error GoTo HandleError
+    Dim sRowSource As String, idx As Index, fld As Field, sFields As String
+    For Each idx In tdf.Indexes
+        sRowSource = sRowSource & ";" & idx.Name & "," & IIf(idx.Primary, "(PK)", "") & IIf(idx.Unique, "(U)", "")
+        sFields = ""
+        For Each fld In idx.Fields
+            sFields = sFields & "+" & fld.Name
+        Next fld
+        sRowSource = sRowSource & "(" & Mid(sFields, 2) & ")"
+    Next idx
+    sRowSource = Mid(sRowSource, 2)
+    DimeIndexName = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione un índice", False, sDefault), "")
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function DimeRelacionName(db As Database, sTableName As String _
+                      , Optional sDefault As String = "") As String
+    'Obtiene una lista de relaciones en las que la tabla es la Tabla Principal
+    On Error GoTo HandleError
+    Dim rel As Relation, sRowSource As String, sRelacion As String
+    For Each rel In db.Relations
+        ' Verificar si es una relación de la tabla en cuestión
+        If rel.Table = sTableName Then
+            sRowSource = sRowSource & ";" & rel.Name & "," & rel.ForeignTable & "," & rel.Fields(0).Name
+        End If
+    Next rel
+    sRowSource = Mid(sRowSource, 2)
+    sRelacion = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione una relación", False, sDefault), "")
+    DimeRelacionName = sRelacion
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume 'HandleExit
+End Function
+
+
+Public Function DimeRelacionName_ADO(sRutaDB As String, sTableName As String) As String
+    'Obtiene una lista de relaciones en las que la tabla tiene Claves externas de Tablas de referencia y se selecciona una de la lista
+    On Error GoTo HandleError
+    Dim sRowSource As String, idx As Index, fld As Field, sFields As String
+    Dim cat As Object
+    Dim tbl As Object
+    Dim key As ADOX.key
+    Dim col As Object
+    Dim strConexion As String
+    
+    ' Crear el objeto ADOX.Catalog
+    Set cat = CreateObject("ADOX.Catalog")
+    
+    ' Cadena de conexión a la base de datos Access externa
+    If sRutaDB Like "*.accdb" Then
+        strConexion = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & sRutaDB
+    ElseIf sRutaDB Like "*.mdb" Then
+        strConexion = "Provider=Microsoft.Jet.OLEDB.4.0;Data Source=" & sRutaDB
+    Else
+        MsgBox "El archivo de base de datos debe tener extensión .accdb o .mdb", vbExclamation
+        GoTo HandleExit
+    End If
+
+    ' Conectar el catálogo a la base de datos externa
+    cat.ActiveConnection = strConexion
+
+    ' Buscar la tabla en el catálogo
+    On Error Resume Next
+    Set tbl = cat.Tables(sTableName)
+    If Err <> 0 Then
+        MsgBox "No se encontró la tabla " & sTableName & "en la base de datos " & sRutaDB, vbExclamation
+        GoTo HandleExit
+    End If
+    On Error GoTo HandleError
+ ' Recorrer las claves (keys) de la tabla
+    For Each key In tbl.Keys
+        ' Verificar si es una clave foránea (relación)
+        If key.Type = 2 Then ' adKeyForeign = 2
+            sRowSource = sRowSource & ";" & key.Name & " (" & key.RelatedTable
+            sFields = ""
+            For Each col In key.Columns
+                sFields = sFields & "," & col.Name
+            Next col
+            sRowSource = sRowSource & "-->" & Mid(sFields, 2) & ")"
+        End If
+    Next key
+    sRowSource = Mid(sRowSource, 2)
+    DimeRelacionName_ADO = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione una relación", False), "")
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+
+Public Function DimeRelacionFromTablaReferencia(lIdAccessDB As Long, sRutaDB As String, sReferenceTable As String)
+    On Error GoTo HandleError
+    Dim cat As Object ' ADOX Catalog
+    Dim tbl As Object ' ADOX Table
+    Dim key As Object ' ADOX Key
+    Dim col As Object
+    Dim strConexion As String
+    Dim sRowSource As String, sField As String, sFields As String
+    Dim tblActual As Object
+    Dim rs As Recordset
+    
+    ' Crear el objeto ADOX.Catalog
+    Set cat = CreateObject("ADOX.Catalog")
+    
+    ' Cadena de conexión a la base de datos Access externa
+    If sRutaDB Like "*.accdb" Then
+        strConexion = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & sRutaDB
+    ElseIf sRutaDB Like "*.mdb" Then
+        strConexion = "Provider=Microsoft.Jet.OLEDB.4.0;Data Source=" & sRutaDB
+    Else
+        MsgBox "El archivo de base de datos debe tener extensión .accdb o .mdb", vbExclamation
+        GoTo HandleExit
+    End If
+
+
+    ' Conectar el catálogo a la base de datos
+    cat.ActiveConnection = strConexion
+    Set rs = CurrentDb.OpenRecordset("SELECT TableName FROM tbTablas WHERE IdAccessDB = " & lIdAccessDB, dbOpenSnapshot)
+    ' Recorrer todas las tablas de la base de datos
+    For Each tblActual In cat.Tables
+        ' Ignorar tablas que no están incluidas en la migración
+        rs.FindFirst "TableName = '" & tblActual.Name & "'"
+        If rs.NoMatch Then GoTo SiguienteTabla
+        If tblActual.Name = sReferenceTable Then GoTo SiguienteTabla
+        ' Recorrer las claves (keys) de cada tabla
+        For Each key In tblActual.Keys
+            ' Verificar si la clave es foránea (relación)
+            If key.Type = 2 Then ' adKeyForeign = 2
+                ' Verificar si la tabla de referencia es la tabla buscada
+                If key.RelatedTable = sReferenceTable Then
+                    sRowSource = sRowSource & ";" & key.Name & " (" & tblActual.Name
+                    sFields = ""
+                    For Each col In key.Columns
+                        sFields = sFields & "," & col.Name
+                    Next col
+                    sRowSource = sRowSource & "-->" & Mid(sFields, 2) & ")"
+                End If
+            End If
+        Next key
+
+SiguienteTabla:
+    Next tblActual
+    sRowSource = Mid(sRowSource, 2)
+    DimeRelacionFromTablaReferencia = Nz(fSelect(sRowSource, 2, 1, "12cm", "Seleccione una relación", False), "")
+    
+    
+HandleExit:
+    On Error Resume Next
+    ' Liberar objetos
+    Set key = Nothing
+    Set tblActual = Nothing
+    Set cat = Nothing
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume 'HandleExit
+End Function
+
+
+Public Function NuevoArreglo(iTipoArreglo As TipoArreglo, lIdAccessDB As Long, sTableName As String) As String
+    'Dependiendo del Tipo de Arreglo solicita los parámetros necesarios para almacenarlos en el Campo Arreglo
+    On Error GoTo HandleError
+    Dim db As Database, tdf As TableDef, fls As Field
+    Dim sCampo As String, iSize As Integer, Tamaño As String, sTipoCampo As String, sReturn As String _
+        , sIndice As String, sIndexFields As String, sIndexPK As String, sIndexUnique As String _
+        , sRutaDB As String, sRelacion As String, sRelatedTable As String, sRelatedField As String, iFieldType As Integer _
+        , sOnUpdateCascade As String, sOnDeleteCascade, sRowSource As String
+    Set db = GetDBfromFile(lIdAccessDB, , , , , sRutaDB)
+    Set tdf = db.TableDefs(sTableName)
+    Select Case iTipoArreglo
+        Case TipoArreglo.Cambio_tamaño_campo
+            sCampo = Nz(DimeFieldName(tdf), "")
+            If sCampo = "" Then GoTo HandleExit
+            iSize = tdf.Fields(sCampo).Size
+            Tamaño = InputBox("Nuevo tamaño del campo", "Tamaño", CStr(iSize))
+            If Not IsNumeric(Tamaño) Then
+                MsgBox "Debe ser un número", vbExclamation
+                GoTo HandleExit
+            End If
+            iSize = CInt(Tamaño)
+            sReturn = sCampo & "," & iSize
+        Case TipoArreglo.Eliminar_campo
+            sCampo = Nz(DimeFieldName(tdf), "")
+            If sCampo = "" Then GoTo HandleExit
+            sReturn = sCampo
+        Case TipoArreglo.Añadir_campo
+            sCampo = InputBox("Nuevo campo", "Nuevo campo", "NombreCampo")
+            If sCampo = "" Then GoTo HandleExit
+            sTipoCampo = Nz(DimeTipoCampo(), "")
+            If sTipoCampo = "" Then GoTo HandleExit
+            If sTipoCampo = "Texto" Then
+                Tamaño = InputBox("Tamaño del campo", "Tamaño", CStr(255))
+                If Tamaño = "" Then GoTo HandleExit
+                If Not IsNumeric(Tamaño) Then
+                    MsgBox "Debe ser un número", vbExclamation
+                    GoTo HandleExit
+                End If
+                iSize = CInt(Tamaño)
+            End If
+            sReturn = sCampo & "," & sTipoCampo & IIf(sTipoCampo = "Texto", "," & iSize, "")
+        Case TipoArreglo.Eliminar_indice
+            sIndice = Nz(DimeIndexName(tdf), "")
+            If sIndice = "" Then GoTo HandleExit
+            sReturn = sIndice
+        Case TipoArreglo.Añadir_indice
+CampoIndice:
+            sCampo = Nz(DimeFieldName(tdf), "")
+            If sCampo = "" Then
+                If sIndexFields = "" Then GoTo HandleExit
+                sIndexFields = Mid(sIndexFields, 2)
+                sIndice = Mid(sIndice, 2)
+            Else
+                sIndexFields = sIndexFields & ";" & sCampo
+                sIndice = sIndice & "_" & sCampo
+                GoTo CampoIndice
+            End If
+            sIndexPK = Nz(fSelect("Sí;No", 2, 1, "6cm", "Primary Key?", False), "")
+            If sIndexPK = "" Then GoTo HandleExit
+            If sIndexPK = "No" Then
+                sIndexUnique = Nz(fSelect("Sí;No", 2, 1, "6cm", "Unique?", False), "")
+                If sIndexUnique = "" Then GoTo HandleExit
+            Else
+                sIndice = "PrimaryKey"
+            End If
+            sReturn = sIndice & "," & IIf(sIndexPK = "Sí", "S", "N") & "," & IIf(sIndexUnique = "Sí", "S", "N") & "," & sIndexFields
+        Case TipoArreglo.Eliminar_relacion
+            'sRelacion = Nz(DimeRelacionFromTablaReferencia(lIdAccessDB, sRutaDB, sTableName), "")
+            sRelacion = Nz(DimeRelacionName(db, sTableName), "")
+            If sRelacion = "" Then GoTo HandleExit
+            sReturn = sRelacion
+        Case TipoArreglo.Añadir_relacion
+            sCampo = Nz(DimeFieldName(tdf), "")
+            If sCampo = "" Then GoTo HandleExit
+            iFieldType = tdf(sCampo).Type
+            sRowSource = TablasDeAccessDB(lIdAccessDB)
+            sRelatedTable = Nz(fSelect(sRowSource, 2, 1, "20", "Seleccione tabla relacionada", False), "")
+            If sRelatedTable = "" Then GoTo HandleExit
+            If sRelatedTable = sTableName Then
+                MsgBox "No se puede relacionar una tabla consigo misma", vbExclamation
+                GoTo HandleExit
+            End If
+            
+            Set tdf = db.TableDefs(sRelatedTable)
+            sRelatedField = Nz(DimeFieldName(tdf), "")
+            If sRelatedField = "" Then GoTo HandleExit
+            If iFieldType <> tdf(sRelatedField).Type Then
+                MsgBox "Los tipos de los campos a relacionar no son iguales", vbExclamation
+                GoTo HandleExit
+            End If
+            sOnUpdateCascade = Nz(fSelect("Sí;No", 2, 1, "6cm", "Actualizar en cascada?", False), "")
+            If sOnUpdateCascade = "" Then GoTo HandleExit
+            sOnDeleteCascade = Nz(fSelect("Sí;No", 2, 1, "6cm", "Eliminar en cascada?", False), "")
+            If sOnDeleteCascade = "" Then GoTo HandleExit
+            'Arreglo = NombreRelacion,CampoFK, Reference_Table, Reference_Field, OnUpdateCascadeSN, OnDeleteCascadeSN
+            sRelacion = sTableName & "_" & sCampo & "__" & sRelatedTable & "_" & sRelatedField
+            sReturn = sRelacion & "," & sCampo & "," & sRelatedTable & "," & sRelatedField & "," & IIf(sOnUpdateCascade = "Sí", "S", "N") & "," & IIf(sOnDeleteCascade = "Sí", "S", "N")
+            
+            
+    End Select
+    NuevoArreglo = sReturn
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume HandleExit
+End Function
+
+Public Function EditaArreglo(lIdArreglo As Long, lIdMigration As Long) As String
+    On Error GoTo HandleError
+    Dim iTipoArreglo As TipoArreglo, lIdAccessDB As Long, sTableName As String, sArreglo As String, vArreglo As Variant, i As Integer
+    iTipoArreglo = DLookup("IdTipoArreglo", "tbTablasArreglos", "Id = " & lIdArreglo)
+    sTableName = DLookup("TableName", "tbTablasArreglos", "Id = " & lIdArreglo)
+    lIdAccessDB = DLookup("Id", "qAccessDBs_Tablas", "IdMigration = " & lIdMigration & " AND TableName = '" & sTableName & "'")
+    sArreglo = DLookup("Arreglo", "tbTablasArreglos", "Id = " & lIdArreglo)
+    vArreglo = Split(sArreglo, ",")
+    Dim db As Database, tdf As TableDef, fls As Field
+    Dim sCampo As String, iSize As Integer, Tamaño As String, sTipoCampo As String, sReturn As String _
+        , sIndice As String, sIndexFields As String, sIndexPK As String, sIndexUnique As String _
+        , sRutaDB As String, sRelacion As String, sRelatedTable As String, sRelatedField As String, iFieldType As Integer _
+        , sOnUpdateCascade As String, sOnDeleteCascade, sRowSource As String
+    Set db = GetDBfromFile(lIdAccessDB, , , , , sRutaDB)
+    Set tdf = db.TableDefs(sTableName)
+    Select Case iTipoArreglo
+        Case TipoArreglo.Cambio_tamaño_campo
+            sCampo = vArreglo(0)
+            iSize = vArreglo(1)
+            sCampo = Nz(DimeFieldName(tdf, sCampo), "")
+            If sCampo = "" Then GoTo HandleExit
+            'iSize = tdf.Fields(sCampo).Size
+            iSize = vArreglo(1)
+            Tamaño = InputBox("Nuevo tamaño del campo", "Tamaño", CStr(iSize))
+            If Not IsNumeric(Tamaño) Then
+                MsgBox "Debe ser un número", vbExclamation
+                GoTo HandleExit
+            End If
+            iSize = CInt(Tamaño)
+            sReturn = sCampo & "," & iSize
+        Case TipoArreglo.Eliminar_campo
+            sCampo = vArreglo(0)
+            sCampo = Nz(DimeFieldName(tdf, sCampo), "")
+            If sCampo = "" Then GoTo HandleExit
+            sReturn = sCampo
+        Case TipoArreglo.Añadir_campo
+            sCampo = vArreglo(0)
+            sTipoCampo = vArreglo(1)
+            If sCampo = "Texto" Then Tamaño = vArreglo(2)
+            sCampo = InputBox("Nuevo campo", "Nuevo campo", sCampo)
+            If sCampo = "" Then GoTo HandleExit
+            sTipoCampo = Nz(DimeTipoCampo(sTipoCampo), "")
+            If sTipoCampo = "" Then GoTo HandleExit
+            If sTipoCampo = "Texto" Then
+                Tamaño = InputBox("Tamaño del campo", "Tamaño", CStr(Tamaño))
+                If Tamaño = "" Then GoTo HandleExit
+                If Not IsNumeric(Tamaño) Then
+                    MsgBox "Debe ser un número", vbExclamation
+                    GoTo HandleExit
+                End If
+                iSize = CInt(Tamaño)
+            End If
+            sReturn = sCampo & "," & sTipoCampo & IIf(sTipoCampo = "Texto", "," & iSize, "")
+        Case TipoArreglo.Eliminar_indice
+            sIndice = sArreglo
+            sIndice = Nz(DimeIndexName(tdf, sIndice), "")
+            If sIndice = "" Then GoTo HandleExit
+            sReturn = sIndice
+        Case TipoArreglo.Añadir_indice
+            Dim vFields As Variant
+            vFields = Split(vArreglo(3), ";")
+            i = 0
+CampoIndice:
+            If i <= UBound(vFields) Then
+                sCampo = Nz(DimeFieldName(tdf, CStr(vFields(i))), "")
+            Else
+                sCampo = Nz(DimeFieldName(tdf), "")
+            End If
+            If sCampo = "" Then
+                If sIndexFields = "" Then GoTo HandleExit
+                sIndexFields = Mid(sIndexFields, 2)
+                sIndice = Mid(sIndice, 2)
+            Else
+                sIndexFields = sIndexFields & ";" & sCampo
+                sIndice = sIndice & "_" & sCampo
+                i = i + 1
+                GoTo CampoIndice
+            End If
+            sIndexPK = IIf(vArreglo(1) = "S", "Sí", "No")
+            sIndexPK = Nz(fSelect("Sí;No", 2, 1, "6cm", "Primary Key?", False, sIndexPK), "")
+            If sIndexPK = "" Then GoTo HandleExit
+            If sIndexPK = "No" Then
+                sIndexUnique = IIf(vArreglo(2) = "S", "Sí", "No")
+                sIndexUnique = Nz(fSelect("Sí;No", 2, 1, "6cm", "Unique?", False, sIndexUnique), "")
+                If sIndexUnique = "" Then GoTo HandleExit
+            Else
+                sIndice = "PrimaryKey"
+            End If
+            sReturn = sIndice & "," & IIf(sIndexPK = "Sí", "S", "N") & "," & IIf(sIndexUnique = "Sí", "S", "N") & "," & sIndexFields
+        Case TipoArreglo.Eliminar_relacion
+            'sRelacion = Nz(DimeRelacionFromTablaReferencia(lIdAccessDB, sRutaDB, sTableName), "")
+            sRelacion = sArreglo
+            sRelacion = Nz(DimeRelacionName(db, sTableName, sRelacion), "")
+            If sRelacion = "" Then GoTo HandleExit
+            sReturn = sRelacion
+        Case TipoArreglo.Añadir_relacion
+            sCampo = vArreglo(1)
+            sCampo = Nz(DimeFieldName(tdf, sCampo), "")
+            If sCampo = "" Then GoTo HandleExit
+            iFieldType = tdf(sCampo).Type
+            sRowSource = TablasDeAccessDB(lIdAccessDB)
+            sRelatedTable = vArreglo(2)
+            sRelatedTable = Nz(fSelect(sRowSource, 2, 1, "20", "Seleccione tabla relacionada", False, sRelatedTable), "")
+            If sRelatedTable = "" Then GoTo HandleExit
+            If sRelatedTable = sTableName Then
+                MsgBox "No se puede relacionar una tabla consigo misma", vbExclamation
+                GoTo HandleExit
+            End If
+            
+            Set tdf = db.TableDefs(sRelatedTable)
+            sRelatedField = vArreglo(3)
+            sRelatedField = Nz(DimeFieldName(tdf, sRelatedField), "")
+            If sRelatedField = "" Then GoTo HandleExit
+            If iFieldType <> tdf(sRelatedField).Type Then
+                MsgBox "Los tipos de los campos a relacionar no son iguales", vbExclamation
+                GoTo HandleExit
+            End If
+            sOnUpdateCascade = IIf(vArreglo(4) = "S", "Sí", "No")
+            sOnUpdateCascade = Nz(fSelect("Sí;No", 2, 1, "6cm", "Actualizar en cascada?", False, sOnUpdateCascade), "")
+            If sOnUpdateCascade = "" Then GoTo HandleExit
+            sOnDeleteCascade = IIf(vArreglo(5) = "S", "Sí", "No")
+            sOnDeleteCascade = Nz(fSelect("Sí;No", 2, 1, "6cm", "Eliminar en cascada?", False, sOnDeleteCascade), "")
+            If sOnDeleteCascade = "" Then GoTo HandleExit
+            'Arreglo = NombreRelacion,CampoFK, Reference_Table, Reference_Field, OnUpdateCascadeSN, OnDeleteCascadeSN
+            sRelacion = sTableName & "_" & sCampo & "__" & sRelatedTable & "_" & sRelatedField
+            sReturn = sRelacion & "," & sCampo & "," & sRelatedTable & "," & sRelatedField & "," & IIf(sOnUpdateCascade = "Sí", "S", "N") & "," & IIf(sOnDeleteCascade = "Sí", "S", "N")
+            
+            
+    End Select
+    EditaArreglo = sReturn
+    
+HandleExit:
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume 'HandleExit
+End Function
+
+Public Function TipoArregloTXT(iTipoArreglo As TipoArreglo) As String
+    Dim sR As String
+    Select Case iTipoArreglo
+        Case 1: sR = "Cambio_tamaño_campo"
+        Case 2: sR = "Eliminar_campo"
+        Case 3: sR = "Añadir_campo"
+        Case 4: sR = "Eliminar_indice"
+        Case 5: sR = "Añadir_indice"
+        Case 6: sR = "Eliminar_relacion"
+        Case 7: sR = "Añadir_relacion"
+        Case Else: sR = "¿?"
+    End Select
+    TipoArregloTXT = sR
+End Function
+
+Public Function RunArregloTabla(lIdTablaArreglo As Long, lIdMigration As Long) As Boolean
+    On Error GoTo HandleError
+    Dim iTipoArreglo As TipoArreglo, sArreglo As String
+    iTipoArreglo = Nz(DLookup("IdTipoArreglo", "tbTablasArreglos", "Id = " & lIdTablaArreglo), 0)
+    sArreglo = Nz(DLookup("Arreglo", "tbTablasArreglos", "Id = " & lIdTablaArreglo), "")
+    If iTipoArreglo = 0 Or sArreglo = "" Then
+        MsgBox "No se encontró el Tipo o la definiciçon del arreglo", vbExclamation
+        GoTo HandleExit
+    End If
+    
+    Dim lIdTabla As Long, sTableName As String, lIdAccessDB As Long, sFileName As String, sRutaDB As String, db As Database, tdf As DAO.TableDef, fld As Field, idx As DAO.Index
+    Dim sFieldName As String, iTipoDato As Integer, iSize As Integer, vArreglo As Variant, strConexion As String, sSQL As String, cnn As Object, sIndexName As String, bPrimaryKey As Boolean, bUnique As Boolean
+    Dim sFields As String, i As Integer, vFields As Variant
+    Dim sRelacion As String, sFK_Field As String, sRef_Table As String, sRef_Field As String, bOnUpdateCascade As Boolean, bOnDeleteCascade As Boolean, rel As DAO.Relation, sForeignTable As String
+    'lIdTabla = DLookup("IdTabla", "tbTablasArreglos", "Id = " & lIdTablaArreglo)
+    sTableName = DLookup("TableName", "tbTablasArreglos", "Id = " & lIdTablaArreglo)
+    sFileName = DLookup("FileName", "tbTablasArreglos", "Id = " & lIdTablaArreglo)
+    lIdAccessDB = DLookup("Id", "tbAccessDBs", "FileName = '" & sFileName & "' AND IdMigration = " & lIdMigration)
+    Set db = GetDBfromFile(lIdAccessDB, , , , , sRutaDB)
+    Set tdf = db.TableDefs(sTableName)
+    vArreglo = Split(sArreglo, ",")
+    
+    If sRutaDB Like "*.accdb" Then
+        strConexion = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & sRutaDB
+    ElseIf sRutaDB Like "*.mdb" Then
+        strConexion = "Provider=Microsoft.Jet.OLEDB.4.0;Data Source=" & sRutaDB
+    Else
+        MsgBox "El archivo de base de datos debe tener extensión .accdb o .mdb", vbExclamation
+        GoTo HandleExit
+    End If
+    
+    Select Case iTipoArreglo
+        Case TipoArreglo.Cambio_tamaño_campo 'utilizamos ADO
+            sFieldName = vArreglo(0)
+            iSize = vArreglo(1)
+            Set cnn = CreateObject("ADODB.Connection")
+            cnn.Open strConexion
+            ' Crear la consulta SQL para modificar el tamaño del campo
+            sSQL = "ALTER TABLE " & sTableName & " ALTER COLUMN " & sFieldName & " TEXT(" & iSize & ")"
+            ' Ejecutar la consulta
+            cnn.Execute sSQL
+            ' Cerrar la conexión
+            
+        Case TipoArreglo.Eliminar_campo 'utilizamos DAO
+            sFieldName = vArreglo(0)
+            tdf.Fields.Delete sFieldName
+        Case TipoArreglo.Añadir_campo
+            sFieldName = vArreglo(0)
+            iTipoDato = Dime_DBTipoCampo(CStr(vArreglo(1)))
+            If iTipoDato = dbText Then
+                iSize = vArreglo(2)
+                Set fld = tdf.CreateField(sFieldName, iTipoDato, iSize)
+            Else
+                Set fld = tdf.CreateField(sFieldName, iTipoDato)
+            End If
+            tdf.Fields.Append fld
+        Case TipoArreglo.Eliminar_indice
+            sIndexName = vArreglo(0)
+            tdf.Indexes.Delete sIndexName
+        Case TipoArreglo.Añadir_indice
+            sIndexName = vArreglo(0)
+            bPrimaryKey = vArreglo(1) = "S"
+            bUnique = vArreglo(2) = "S"
+            For i = 3 To UBound(vArreglo)
+                sFields = sFields & "," & vArreglo(i)
+            Next i
+            sFields = Mid(sFields, 2)
+            vFields = Split(sFields, ";")
+             ' Crear un nuevo índice
+            Set idx = tdf.CreateIndex(sIndexName)
+            For i = 0 To UBound(vFields)
+                ' Agregar el campo que será indexado
+                idx.Fields.Append idx.CreateField(vFields(i))
+            Next i
+            ' Opcional: establecer si el índice es único
+            If bPrimaryKey Then idx.Primary = True
+            If bUnique Then idx.Unique = True
+            ' Añadir el índice a la tabla
+            tdf.Indexes.Append idx
+        Case TipoArreglo.Eliminar_relacion
+            sRelacion = vArreglo(0)
+            sForeignTable = vArreglo(1)
+            Set cnn = CreateObject("ADODB.Connection")
+            cnn.Open strConexion
+            ' Crear la consulta SQL para modificar el tamaño del campo
+            sSQL = "ALTER TABLE " & sForeignTable & " DROP CONSTRAINT " & sRelacion
+            ' Ejecutar la consulta
+            cnn.Execute sSQL
+            'db.Relations.Delete sRelacion
+        Case TipoArreglo.Añadir_relacion 'Arreglo = NombreRelacion,CampoFK, Reference_Table, Reference_Field, OnUpdateCascadeSN, OnDeleteCascadeSN
+            sRelacion = vArreglo(0)
+            sFK_Field = vArreglo(1)
+            sRef_Table = vArreglo(2)
+            sRef_Field = vArreglo(3)
+            bOnUpdateCascade = vArreglo(4) = "S"
+            bOnDeleteCascade = vArreglo(5) = "S"
+            ' Crear la nueva relación
+            Set rel = db.CreateRelation(sRelacion, sTableName, sRef_Table)
+        
+            ' Agregar los campos que definen la relación
+            rel.Fields.Append rel.CreateField(sFK_Field)
+            rel.Fields(sFK_Field).ForeignName = sRef_Field
+        
+            ' Habilitar la integridad referencial
+            'rel.Attributes = dbRelationUnique '
+            If bOnUpdateCascade Then rel.Attributes = rel.Attributes + dbRelationUpdateCascade
+            If bOnDeleteCascade Then rel.Attributes = rel.Attributes + dbRelationDeleteCascade
+        
+            ' Añadir la relación a la base de datos
+            Debug.Print "Table: " & rel.Table, "Field: " & rel.Fields(0).Name
+            Debug.Print "ForeignTable: " & rel.ForeignTable, "ForeignField: " & rel.Fields(0).ForeignName
+            db.Relations.Append rel
+    End Select
+    RunArregloTabla = True
+    
+    
+
+HandleExit:
+    On Error Resume Next
+ ' Cerrar los objetos DAO
+    Set fld = Nothing
+    Set tdf = Nothing
+    Set db = Nothing
+ ' Cerrar los objetos ADO
+    cnn.Close
+    Set cnn = Nothing
+    Exit Function
+HandleError:
+    MsgBox Err.Description
+    Resume ' HandleExit
+End Function
+
+Function papa()
+    Dim db As Database, rel As Relation
+    Set db = OpenDatabase("E:\_DOCS1_\_Comercios_Gestion_Actividades\TOCATEJA\A2SS\T4\T4_Art.mdb", , True)
+    For Each rel In db.Relations
+        Debug.Print rel.Name, rel.Fields(0).Name, rel.ForeignTable ', rel.ForeignFields(0)
+    Next rel
 End Function

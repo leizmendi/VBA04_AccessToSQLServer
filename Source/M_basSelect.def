@@ -7,7 +7,8 @@ Public Function fSelect(sRowSource As String _
                       , iNumCols As Integer _
                       , sColWidths As String _
                       , sInfo As String _
-                      , bMultiSelect As Boolean) As Variant
+                      , bMultiSelect As Boolean _
+             , Optional vDefault As Variant) As Variant
     On Error GoTo HandleError
     Dim sXML As String, sTipo As String, sResult As String
     PonXML sXML, "RowSource", sRowSource
@@ -22,6 +23,7 @@ Public Function fSelect(sRowSource As String _
     PonXML sXML, "ColWidths", sColWidths
     PonXML sXML, "Info", sInfo
     PonXML sXML, "MultiSelect", IIf(bMultiSelect, "S", "N")
+    PonXML sXML, "Default", Nz(vDefault, "")
     DoCmd.OpenForm "frmSelect", , , , , acDialog, sXML
     On Error Resume Next
     sResult = Forms("frmSelect").Result
